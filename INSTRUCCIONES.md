@@ -1,124 +1,44 @@
-# Instrucciones — Reapuntar Docker de Chatwoot original → imagen custom
+# Instrucciones — Fork custom de Chatwoot sobre Docker
 
-Estás corriendo la imagen oficial (`chatwoot/chatwoot`). Estos pasos la reemplazan por
-tu imagen construida desde este fork (incluye la carpeta `custom/`). **Tus datos se
-conservan**: postgres, redis y storage viven en volúmenes Docker, no en la imagen.
+Corres Chatwoot en Docker y quieres usar tu versión con las personalizaciones de
+`custom/` en lugar de la imagen oficial (`chatwoot/chatwoot`).
 
----
+**Cómo se reparte el trabajo:**
 
-## 0. Prerrequisitos (una sola vez)
-
-- El código de este fork debe estar en el host de prod (misma carpeta donde está tu `.env`):
-  ```bash
-  cd /ruta/donde/está/tu/docker-compose
-  git clone git@github.com:Marher0181/chatwoot_creative.git .   # si aún no está
-  git checkout feat/assignee-only-visibility
-  ```
-  Si ya tienes el repo, solo:
-  ```bash
-  git fetch origin && git checkout feat/assignee-only-visibility && git pull
-  ```
-- Confirma que tu `.env` sigue en la carpeta (el compose lo usa con `env_file: .env`).
+- **Máquina de desarrollo** → solo git: mergear versiones nuevas de Chatwoot y hacer push.
+- **Servidor de producción** → `git pull` + construir y levantar la imagen custom.
+- **Tus datos se conservan** siempre: postgres, redis y storage viven en volúmenes Docker,
+  no en la imagen. Cambiar de imagen no los borra.
 
 ---
 
-## 1. Backup antes de tocar nada (importante)
+## Referencia rápida
 
-```bash
-docker compose -f docker-compose.production.yaml exec -T postgres \
-  pg_dump -U postgres chatwoot > backup_$(date +%F).sql
-```
+El comando de compose siempre lleva **los dos** `-f` (si omites el segundo, vuelves a la
+imagen oficial). Define este alias una vez en el shell del servidor:
 
----
-
-## 2. Detener los contenedores de app (NO borres volúmenes)
-
-```bash
-docker compose -f docker-compose.production.yaml stop rails sidekiq
-```
-> Nunca uses `down -v`: `-v` borra los volúmenes (perderías la base de datos).
-
----
-
-## 3. Construir la imagen custom y levantar reapuntando
-
-Un solo comando construye la imagen desde el fork y arranca `rails` + `sidekiq`
-usándola (gracias al override `docker-compose.custom.yaml`):
-
-```bash
-docker compose \
-  -f docker-compose.production.yaml \
-  -f docker-compose.custom.yaml \
-  up -d --build
-```
-
-- `-f docker-compose.custom.yaml` es lo que reapunta la imagen (de `chatwoot/chatwoot`
-  a `chatwoot-custom:4.16.2`).
-- `--build` fuerza la construcción con tu `custom/` dentro.
-
----
-
-## 4. Migraciones de base de datos
-
-El entrypoint `rails.sh` corre las migraciones al arrancar. Para forzarlas manualmente:
-
-```bash
-docker compose -f docker-compose.production.yaml -f docker-compose.custom.yaml \
-  exec rails bundle exec rails db:chatwoot_prepare
-```
-
----
-
-## 5. Verificar
-
-Que la imagen en uso sea la custom:
-```bash
-docker compose -f docker-compose.production.yaml -f docker-compose.custom.yaml \
-  images rails sidekiq
-```
-(debe mostrar `chatwoot-custom:4.16.2`)
-
-Que el overlay custom esté activo:
-```bash
-docker compose -f docker-compose.production.yaml -f docker-compose.custom.yaml \
-  exec rails bundle exec rails runner 'puts ConversationPolicy.ancestors.include?(Custom::ConversationPolicy)'
-```
-Debe imprimir `true`.
-
----
-
-## 6. Si algo falla — volver a la imagen oficial (rollback)
-
-```bash
-docker compose -f docker-compose.production.yaml up -d rails sidekiq
-```
-(sin el `-f docker-compose.custom.yaml` vuelve a `chatwoot/chatwoot`)
-
----
-
-## IMPORTANTE: usa SIEMPRE los dos `-f` juntos
-
-De ahora en adelante, para cualquier operación (up, restart, logs, exec) usa los dos
-archivos, o volverás sin querer a la imagen oficial:
-
-```bash
-docker compose -f docker-compose.production.yaml -f docker-compose.custom.yaml <comando>
-```
-
-Atajo opcional — exporta esto en tu shell y usa `dc` en vez de todo el comando:
 ```bash
 alias dc='docker compose -f docker-compose.production.yaml -f docker-compose.custom.yaml'
-# luego: dc up -d --build   |   dc logs -f rails   |   dc ps
 ```
+
+A partir de ahí: `dc up -d --build`, `dc logs -f rails`, `dc ps`, etc.
 
 ---
 
-## Actualizaciones futuras — proceso completo (ej. v4.17.0)
+# A · Máquina de desarrollo
 
-Tu trabajo en `custom/` **no se toca** en ninguna actualización: vive en archivos que
-upstream no tiene.
+Aquí **no se usa Docker**. Solo se actualiza el código y se sube a `origin`.
 
-### En tu máquina de desarrollo
+## A.1 · Prerrequisitos (una vez)
+
+```bash
+git clone git@github.com:Marher0181/chatwoot_creative.git
+cd chatwoot_creative
+git checkout feat/assignee-only-visibility
+git remote -v      # confirma que 'upstream' apunta a chatwoot/chatwoot
+```
+
+## A.2 · Actualizar a una versión nueva de Chatwoot (ej. v4.17.0)
 
 **1. Árbol limpio y en la rama correcta:**
 
@@ -133,7 +53,7 @@ git checkout feat/assignee-only-visibility
 git fetch upstream --tags
 ```
 
-**3. (Recomendado) Comprueba antes si la versión toca tus archivos:**
+**3. (Recomendado) Comprueba si la versión toca tus archivos:**
 
 ```bash
 git diff --stat v4.16.2 v4.17.0 -- \
@@ -145,7 +65,7 @@ git diff --stat v4.16.2 v4.17.0 -- \
 ```
 
 - **Vacío** → merge 100% limpio.
-- Aparece `action_cable_listener.rb` → revisa solo ese módulo (ver "Si hay conflicto").
+- Aparece `action_cable_listener.rb` → revisa ese módulo (ver A.3).
 
 **4. Mergea la versión nueva:**
 
@@ -165,24 +85,7 @@ git merge v4.17.0 --no-edit
 git push origin feat/assignee-only-visibility
 ```
 
-### En el host de producción
-
-**7. Trae el código y reconstruye:**
-
-```bash
-git pull origin feat/assignee-only-visibility
-dc up -d --build
-```
-
-**8. Verifica:**
-
-```bash
-dc exec rails bundle exec rails runner 'puts ConversationPolicy.ancestors.include?(Custom::ConversationPolicy)'
-```
-
-→ debe imprimir `true`.
-
-### Si el paso 4 da conflicto
+## A.3 · Si el merge (paso 4) da conflicto
 
 Solo puede pasar en 2 sitios, y son raros:
 
@@ -194,3 +97,90 @@ Solo puede pasar en 2 sitios, y son raros:
   `ponytail:` que lo explica.
 
 Después: `git commit` y continúa en el paso 5.
+
+---
+
+# B · Servidor de producción
+
+## B.1 · Prerrequisitos (una vez)
+
+- El repo del fork debe estar en el host, en la misma carpeta donde está tu `.env`:
+
+  ```bash
+  cd /ruta/donde/está/tu/docker-compose
+  git clone git@github.com:Marher0181/chatwoot_creative.git .
+  git checkout feat/assignee-only-visibility
+  ```
+
+  Si ya tienes el repo: `git fetch origin && git checkout feat/assignee-only-visibility && git pull`
+
+- Confirma que tu `.env` sigue en la carpeta (el compose lo usa con `env_file: .env`).
+- Define el alias `dc` (ver "Referencia rápida").
+
+## B.2 · Primera vez: reapuntar de la imagen oficial → custom
+
+**1. Backup de la base de datos:**
+
+```bash
+docker compose -f docker-compose.production.yaml exec -T postgres \
+  pg_dump -U postgres chatwoot > backup_$(date +%F).sql
+```
+
+**2. Detén los contenedores de app (NO borres volúmenes):**
+
+```bash
+docker compose -f docker-compose.production.yaml stop rails sidekiq
+```
+
+> Nunca uses `down -v`: el `-v` borra los volúmenes (perderías la base de datos).
+
+**3. Construye la imagen custom y levanta reapuntando:**
+
+```bash
+dc up -d --build
+```
+
+**4. Migraciones** (el entrypoint las corre solo; para forzarlas):
+
+```bash
+dc exec rails bundle exec rails db:chatwoot_prepare
+```
+
+**5. Verifica:**
+
+```bash
+dc images rails sidekiq     # debe mostrar chatwoot-custom:<versión>
+dc exec rails bundle exec rails runner 'puts ConversationPolicy.ancestors.include?(Custom::ConversationPolicy)'
+```
+
+El segundo comando debe imprimir `true`.
+
+## B.3 · Desplegar una actualización ya mergeada en desarrollo
+
+Después de completar la parte A y hacer push:
+
+```bash
+git pull origin feat/assignee-only-visibility
+dc up -d --build
+dc exec rails bundle exec rails runner 'puts ConversationPolicy.ancestors.include?(Custom::ConversationPolicy)'
+```
+
+## B.4 · Rollback a la imagen oficial
+
+```bash
+docker compose -f docker-compose.production.yaml up -d rails sidekiq
+```
+
+(sin el segundo `-f` vuelve a `chatwoot/chatwoot`). Tus datos siguen intactos.
+
+## B.5 · Uso diario
+
+Usa **siempre** el alias `dc` (o los dos `-f`) para cualquier operación:
+
+```bash
+dc ps
+dc logs -f rails
+dc restart rails
+```
+
+Si usas `docker compose` con un solo `-f`, volverás sin querer a la imagen oficial.
