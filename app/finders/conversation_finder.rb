@@ -125,14 +125,7 @@ class ConversationFinder
   end
 
   def filter_by_assignee_type
-    # FORK: agente restringido solo ve lo propio, ignorando assignee_type del param
-    if restricted_agent?
-      @conversations = @conversations.where(assignee_id: @current_user.id)
-      return @conversations
-    end
-
-    # ---- código original intacto debajo ----
-    case @params[:assignee_type]
+    case @assignee_type
     when 'me'
       @conversations = @conversations.assigned_to(current_user)
     when 'unassigned'
@@ -141,12 +134,6 @@ class ConversationFinder
       @conversations = @conversations.assigned
     end
     @conversations
-  end
-
-  private
-
-  def restricted_agent?
-    !Current.account_user&.administrator?
   end
 
   def filter_by_conversation_type
