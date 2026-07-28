@@ -1,33 +1,32 @@
 # Instrucciones — Fork custom de Chatwoot sobre Docker
 
 Corres Chatwoot en Docker y quieres usar tu versión con las personalizaciones de
-`custom/` en lugar de la imagen oficial (`chatwoot/chatwoot`).
+`custom/` en lugar de la imagen oficial.
 
-**Cómo se reparte el trabajo:**
+## Cómo funciona (el método real)
 
-- **Máquina de desarrollo** → solo git: mergear versiones nuevas de Chatwoot y hacer push.
-- **Servidor de producción** → `git pull` + construir y levantar la imagen custom.
-- **Tus datos se conservan** siempre: postgres, redis y storage viven en volúmenes Docker,
-  no en la imagen. Cambiar de imagen no los borra.
-
----
+- La imagen custom es un **overlay delgado sobre la imagen oficial**: parte de
+  `chatwoot/chatwoot:<versión>` y solo le copia `custom/` + `config/application.rb`
+  (ver `Dockerfile.custom`). Como tus cambios son **solo Ruby** (policies, finders,
+  listeners, config), **no se recompila nada** → el build tarda segundos y evita el bug
+  de compilación de Chatwoot (bootsnap 1.16 vs Ruby 3.4/prism).
+- La imagen se publica en **GHCR** (público): `ghcr.io/marher0181/chatwoot-custom`.
+- **Máquina de desarrollo** → git (mergear versiones) + construir overlay + `push`.
+- **Servidor de producción** → cambiar el `image:`, `pull`, migrar.
+- **Tus datos se conservan** siempre: postgres/redis/storage viven en volúmenes Docker,
+  no en la imagen.
 
 ## Referencia rápida
 
-El comando de compose siempre lleva **los dos** `-f` (si omites el segundo, vuelves a la
-imagen oficial). Define este alias una vez en el shell del servidor:
-
-```bash
-alias dc='docker compose -f docker-compose.production.yaml -f docker-compose.custom.yaml'
-```
-
-A partir de ahí: `dc up -d --build`, `dc logs -f rails`, `dc ps`, etc.
+- Imagen: `ghcr.io/marher0181/chatwoot-custom:<versión>` (versión actual: `4.16.2`)
+- Base oficial: `chatwoot/chatwoot:v<versión>`
+- Dockerfile del overlay: `Dockerfile.custom`
 
 ---
 
 # A · Máquina de desarrollo
 
-Aquí **no se usa Docker**. Solo se actualiza el código y se sube a `origin`.
+Aquí se actualiza el código, se construye la imagen overlay y se publica en GHCR.
 
 ## A.1 · Prerrequisitos (una vez)
 
@@ -38,7 +37,14 @@ git checkout feat/assignee-only-visibility
 git remote -v      # confirma que 'upstream' apunta a chatwoot/chatwoot
 ```
 
-## A.2 · Actualizar a una versión nueva de Chatwoot (ej. v4.17.0)
+Login en GHCR para poder hacer `push` (necesita un Personal Access Token *classic* con
+scope **`write:packages`**):
+
+```bash
+echo <TU_PAT> | docker login ghcr.io -u marher0181 --password-stdin
+```
+
+## A.2 · Publicar una versión nueva (ej. v4.17.0)
 
 **1. Árbol limpio y en la rama correcta:**
 
@@ -65,7 +71,7 @@ git diff --stat v4.16.2 v4.17.0 -- \
 ```
 
 - **Vacío** → merge 100% limpio.
-- Aparece `action_cable_listener.rb` → revisa ese módulo (ver A.3).
+- Aparece `action_cable_listener.rb` → revisa ese módulo (ver A.4).
 
 **4. Mergea la versión nueva:**
 
@@ -73,28 +79,40 @@ git diff --stat v4.16.2 v4.17.0 -- \
 git merge v4.17.0 --no-edit
 ```
 
-**5. Actualiza el tag de la imagen** en `docker-compose.custom.yaml` (en las DOS apariciones):
+**5. Construye la imagen overlay** (base = imagen oficial de esa versión):
 
-```yaml
-    image: chatwoot-custom:4.17.0   # cambia 4.16.2 -> 4.17.0
+```bash
+docker build -f Dockerfile.custom \
+  --build-arg CHATWOOT_VERSION=v4.17.0 \
+  -t ghcr.io/marher0181/chatwoot-custom:4.17.0 .
 ```
 
-**6. Sube los cambios:**
+**6. Publica en GHCR:**
+
+```bash
+docker push ghcr.io/marher0181/chatwoot-custom:4.17.0
+```
+
+**7. Sube el código a origin:**
 
 ```bash
 git push origin feat/assignee-only-visibility
 ```
 
-## A.3 · Si el merge (paso 4) da conflicto
+## A.3 · Hacer público el paquete (solo la primera vez, o por versión si es privado)
+
+GitHub → tu perfil → **Packages** → `chatwoot-custom` → *Package settings* →
+**Change visibility → Public**. Así prod hace `pull` sin credenciales.
+
+## A.4 · Si el merge (paso 4) da conflicto
 
 Solo puede pasar en 2 sitios, y son raros:
 
 - **`config/application.rb`** → quédate con las líneas de upstream **y** conserva el bloque
-  `if ChatwootApp.custom?`. Luego `git add config/application.rb`.
+  `if Rails.root.join('custom').exist?`. Luego `git add config/application.rb`.
 - **`custom/app/listeners/custom/action_cable_listener.rb`** (si el paso 3 avisó que upstream
   cambió los métodos de eventos) → copia el cuerpo nuevo del método desde el core y vuelve a
-  cambiar solo la línea de tokens a `conversation_tokens(...)`. Está marcado con el comentario
-  `ponytail:` que lo explica.
+  cambiar solo la línea de tokens a `conversation_tokens(...)`. Marcado con comentario `ponytail:`.
 
 Después: `git commit` y continúa en el paso 5.
 
@@ -102,85 +120,95 @@ Después: `git commit` y continúa en el paso 5.
 
 # B · Servidor de producción
 
+Tu prod usa `~/chatwoot/docker-compose.yml` (tuyo, no el del repo). Usuario de postgres: `chatwoot`.
+
 ## B.1 · Prerrequisitos (una vez)
 
-- El repo del fork debe estar en el host, en la misma carpeta donde está tu `.env`:
+- Estar en la carpeta del compose con tu `.env`:
 
   ```bash
-  cd /ruta/donde/está/tu/docker-compose
-  git clone git@github.com:Marher0181/chatwoot_creative.git .
-  git checkout feat/assignee-only-visibility
+  cd ~/chatwoot
+  ls docker-compose.yml .env
   ```
 
-  Si ya tienes el repo: `git fetch origin && git checkout feat/assignee-only-visibility && git pull`
+- El paquete debe estar **público** en GHCR (paso A.3) → no hace falta `docker login` en prod.
 
-- Confirma que tu `.env` sigue en la carpeta (el compose lo usa con `env_file: .env`).
-- Define el alias `dc` (ver "Referencia rápida").
+## B.2 · Primer despliegue (reapuntar de imagen oficial → custom)
 
-## B.2 · Primera vez: reapuntar de la imagen oficial → custom
-
-**1. Backup de la base de datos:**
+**1. Backup de la BD:**
 
 ```bash
-docker compose -f docker-compose.production.yaml exec -T postgres \
-  pg_dump -U postgres chatwoot > backup_$(date +%F).sql
+docker compose exec -T postgres pg_dump -U chatwoot chatwoot > ~/backup_chatwoot_$(date +%F).sql
 ```
 
-**2. Detén los contenedores de app (NO borres volúmenes):**
+**2. Cambia el `image:` en `~/chatwoot/docker-compose.yml`** (el anchor `base`, ¡una sola vez `image:`!):
 
-```bash
-docker compose -f docker-compose.production.yaml stop rails sidekiq
+```yaml
+  base: &base
+    image: ghcr.io/marher0181/chatwoot-custom:4.16.2   # antes: chatwoot/chatwoot:latest
 ```
 
-> Nunca uses `down -v`: el `-v` borra los volúmenes (perderías la base de datos).
-
-**3. Construye la imagen custom y levanta reapuntando:**
+**3. Baja la imagen y recrea:**
 
 ```bash
-dc up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-**4. Migraciones** (el entrypoint las corre solo; para forzarlas):
+**4. Migraciones (manual — tu compose no las corre solo):**
 
 ```bash
-dc exec rails bundle exec rails db:chatwoot_prepare
+docker compose exec rails bundle exec rails db:chatwoot_prepare
+docker compose restart rails sidekiq
 ```
 
 **5. Verifica:**
 
 ```bash
-dc images rails sidekiq     # debe mostrar chatwoot-custom:<versión>
-dc exec rails bundle exec rails runner 'puts ConversationPolicy.ancestors.include?(Custom::ConversationPolicy)'
+docker compose exec rails cat config/version.rb
+docker compose exec rails bundle exec rails runner \
+  'puts [ConversationPolicy, ConversationFinder, ActionCableListener, NotificationListener].map { |k| k.ancestors.any? { |a| a.name.to_s.start_with?("Custom::") } }.inspect'
 ```
 
-El segundo comando debe imprimir `true`.
+Esperado: la versión correcta y `[true, true, true, true]`.
 
-## B.3 · Desplegar una actualización ya mergeada en desarrollo
+## B.3 · Actualizar a una versión ya publicada
 
-Después de completar la parte A y hacer push:
+Después de completar la parte A (build + push de la versión nueva):
 
 ```bash
-git pull origin feat/assignee-only-visibility
-dc up -d --build
-dc exec rails bundle exec rails runner 'puts ConversationPolicy.ancestors.include?(Custom::ConversationPolicy)'
+cd ~/chatwoot
+# edita docker-compose.yml -> image: ghcr.io/marher0181/chatwoot-custom:<nueva-versión>
+docker compose pull
+docker compose up -d
+docker compose exec rails bundle exec rails db:chatwoot_prepare
+docker compose restart rails sidekiq
 ```
+
+> Si reusas el MISMO tag (reconstruiste sin cambiar versión), `docker compose pull` puede no
+> traer la nueva. Fuerza con: `docker pull ghcr.io/marher0181/chatwoot-custom:<tag>` y luego `up -d`.
 
 ## B.4 · Rollback a la imagen oficial
 
-```bash
-docker compose -f docker-compose.production.yaml up -d rails sidekiq
+Vuelve la línea del `image:` a la versión oficial conocida y recrea:
+
+```yaml
+    image: chatwoot/chatwoot:v4.16.1
 ```
 
-(sin el segundo `-f` vuelve a `chatwoot/chatwoot`). Tus datos siguen intactos.
-
-## B.5 · Uso diario
-
-Usa **siempre** el alias `dc` (o los dos `-f`) para cualquier operación:
-
 ```bash
-dc ps
-dc logs -f rails
-dc restart rails
+docker compose up -d
 ```
 
-Si usas `docker compose` con un solo `-f`, volverás sin querer a la imagen oficial.
+(Tus datos siguen intactos. Si algo quedó mal en la BD, restaura el backup del paso B.2.1.)
+
+## B.5 · Si el disco se llena (`no space left on device`)
+
+```bash
+df -h /
+docker system df
+docker system prune -af      # borra imágenes sin usar, contenedores parados y caché
+```
+
+`prune -af` no toca las imágenes de contenedores en ejecución. Si aun así falta espacio,
+hay que ampliar el volumen EBS desde AWS (EC2 → Volumes → Modify) + `sudo growpart` + `sudo resize2fs`.
