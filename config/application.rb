@@ -52,8 +52,9 @@ module Chatwoot
     enterprise_initializers = Rails.root.join('enterprise/config/initializers')
     Dir[enterprise_initializers.join('**/*.rb')].each { |f| require f } if enterprise_initializers.exist?
 
-    # Custom overlay (fork customizations) — mirrors the enterprise overlay above
-    if ChatwootApp.custom?
+    # Custom overlay (fork customizations) — mirrors the enterprise overlay above.
+    # Direct path check (not ChatwootApp.custom?) because ChatwootApp isn't loaded this early.
+    if Rails.root.join('custom').exist?
       # rubocop:disable Rails/FilePath
       config.eager_load_paths += Dir["#{Rails.root}/custom/app/**"]
       # rubocop:enable Rails/FilePath
