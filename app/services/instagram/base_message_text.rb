@@ -58,9 +58,23 @@ class Instagram::BaseMessageText < Instagram::WebhooksBaseService
     message_to_delete.update!(content: I18n.t('conversations.messages.deleted'), deleted: true)
   end
 
+  # Fetching the Instagram profile is best-effort: Instagram denies profile access for users
+  # who have not messaged the account before (error 230), which is exactly the case for
+  # ad-initiated threads. Fall back to a contact built from the scope id we already have,
+  # because without a contact_inbox #create_message drops the inbound message entirely,
+  # leaving the conversation with no incoming message — which then makes can_reply? false
+  # and blocks agents behind the messaging window even though the customer wrote first.
+  def ensure_contact(ig_scope_id)
+    find_or_create_contact(fetch_instagram_user(ig_scope_id).presence || unknown_user(ig_scope_id))
+  end
+
+  def unknown_user(ig_scope_id)
+    { 'name' => "Unknown (IG: #{ig_scope_id})", 'id' => ig_scope_id }.with_indifferent_access
+  end
+
   # Methods to be implemented by subclasses
-  def ensure_contact(contact_id)
-    raise NotImplementedError, "#{self.class} must implement #ensure_contact"
+  def fetch_instagram_user(ig_scope_id)
+    raise NotImplementedError, "#{self.class} must implement #fetch_instagram_user"
   end
 
   def create_message
