@@ -30,9 +30,19 @@ Corres Chatwoot en Docker y quieres usar tu versión con las personalizaciones d
 - Rama de producción: `feat/assignee-only-visibility`
 - **Convención de tags:**
   - Subir de versión de Chatwoot → el tag es la versión: `4.17.0` (ver **A.2**).
-  - Cambio de código propio sin subir de versión → sufijo incremental: `4.16.2-ig-1`,
-    `4.16.2-ig-2`… (ver **A.5**). Nunca reutilices un tag ya publicado: `docker compose pull`
-    puede quedarse con la imagen vieja en caché y creerás que desplegaste algo que no.
+  - Cambio de código propio sin subir de versión → sufijo incremental sobre la misma versión:
+    `4.16.2` → `4.16.2-2` → `4.16.2-3` → `4.16.2-4`… (ver **A.5**). Nunca reutilices un tag ya
+    publicado: `docker compose pull` puede quedarse con la imagen vieja en caché y creerás que
+    desplegaste algo que no.
+- **Ver qué tags existen ya** (sin abrir el navegador ni hacer login, el paquete es público):
+
+  ```bash
+  TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:marher0181/chatwoot-custom:pull&service=ghcr.io" \
+    | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+  curl -s -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/marher0181/chatwoot-custom/tags/list
+  ```
+
+- **Ver qué tag corre en prod:** `cd ~/chatwoot && docker compose config | grep image:`
 
 ## Qué está personalizado (módulos `Custom::`)
 
@@ -156,7 +166,7 @@ Después: `git commit` y continúa en el paso 5.
 
 Este es el flujo para tus propios arreglos, distinto de A.2 (que es para subir de versión de
 Chatwoot). Los comandos de abajo usan como ejemplo el cambio de Instagram: rama
-`feat/instagram-ads-referral`, versión de Chatwoot `v4.16.2`, tag nuevo `4.16.2-ig-1`.
+`feat/instagram-ads-referral`, versión de Chatwoot `v4.16.2`, tag nuevo `4.16.2-4`.
 Sustituye esos tres valores por los tuyos.
 
 **1. Árbol limpio y rama de producción actualizada:**
@@ -187,15 +197,15 @@ git merge feat/instagram-ads-referral --no-edit
 ```
 
 **4. Elige el tag nuevo.** La versión de Chatwoot no cambia, así que el tag lleva sufijo
-incremental: `4.16.2-ig-1`, `4.16.2-ig-2`… Para ver los ya publicados: GitHub → tu perfil →
-**Packages** → `chatwoot-custom`. **Nunca reutilices un tag publicado.**
+incremental: si el último publicado es `4.16.2-3`, el tuyo es `4.16.2-4`. Lista los publicados
+con el `curl` de **Referencia rápida**. **Nunca reutilices un tag publicado.**
 
 **5. Construye el overlay** (`CHATWOOT_VERSION` = la misma versión oficial que ya corre en prod):
 
 ```bash
 docker build -f Dockerfile.custom \
   --build-arg CHATWOOT_VERSION=v4.16.2 \
-  -t ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1 .
+  -t ghcr.io/marher0181/chatwoot-custom:4.16.2-4 .
 ```
 
 Debe tardar segundos. Si se pone a compilar gemas o assets, `CHATWOOT_VERSION` está mal.
@@ -204,7 +214,7 @@ Debe tardar segundos. Si se pone a compilar gemas o assets, `CHATWOOT_VERSION` e
 
 ```bash
 docker run --rm --entrypoint ls \
-  ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1 -R /app/custom/app
+  ghcr.io/marher0181/chatwoot-custom:4.16.2-4 -R /app/custom/app
 ```
 
 Deben aparecer tus archivos nuevos. Si falta alguno, el `COPY` del `Dockerfile.custom` no lo
@@ -214,7 +224,7 @@ recogió (¿está el archivo commiteado?).
 
 ```bash
 echo <TU_PAT> | docker login ghcr.io -u marher0181 --password-stdin   # si no estás logueado
-docker push ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1
+docker push ghcr.io/marher0181/chatwoot-custom:4.16.2-4
 ```
 
 **8. Sube el código a origin:**
@@ -229,7 +239,7 @@ git push origin feat/assignee-only-visibility
 ssh <tu-servidor>
 cd ~/chatwoot
 cp docker-compose.yml docker-compose.yml.bak      # para el rollback del paso 12
-# edita el anchor `base` -> image: ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1
+# edita el anchor `base` -> image: ghcr.io/marher0181/chatwoot-custom:4.16.2-4
 docker compose pull
 docker compose up -d
 ```
