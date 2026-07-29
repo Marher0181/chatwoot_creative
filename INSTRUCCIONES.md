@@ -67,11 +67,19 @@ git diff --stat v4.16.2 v4.17.0 -- \
   app/policies/conversation_policy.rb \
   app/listeners/action_cable_listener.rb \
   app/listeners/notification_listener.rb \
+  app/builders/messages/facebook/message_builder.rb \
+  app/builders/messages/instagram/base_message_builder.rb \
+  app/services/instagram/message_text.rb \
+  app/services/instagram/messenger/message_text.rb \
   config/application.rb
 ```
 
 - **Vacío** → merge 100% limpio.
 - Aparece `action_cable_listener.rb` → revisa ese módulo (ver A.4).
+- Aparece un archivo de Instagram/Facebook → revisa el módulo `Custom::` correspondiente: los
+  overrides llaman a `super` y a helpers privados de core (`message_params`,
+  `fetch_instagram_user`, `unknown_user`, `message`), así que si core los renombra el override
+  deja de aplicar en silencio.
 
 **4. Mergea la versión nueva:**
 
