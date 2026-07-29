@@ -91,6 +91,12 @@ class Messages::Instagram::BaseMessageBuilder < Messages::Messenger::MessageBuil
     message[:reply_to][:mid] if message[:reply_to].present? && message[:reply_to][:mid].present?
   end
 
+  # Ad-initiated threads (Click to Instagram Direct) carry the ad context on the message,
+  # while Messenger-style referral events put it on the messaging envelope. Meta uses both.
+  def referral_attributes
+    @referral_attributes ||= (message[:referral].presence || @messaging[:referral])&.to_h&.deep_stringify_keys || {}
+  end
+
   def build_message
     # Duplicate webhook events may be sent for the same message
     # when a user is connected to the Instagram account through both Messenger and Instagram login.
@@ -169,6 +175,7 @@ class Messages::Instagram::BaseMessageBuilder < Messages::Messenger::MessageBuil
 
     params[:content_attributes][:external_echo] = true if @outgoing_echo
     params[:content_attributes][:is_unsupported] = true if message_is_unsupported?
+    params[:content_attributes][:referral] = referral_attributes if referral_attributes.present?
     params
   end
 
