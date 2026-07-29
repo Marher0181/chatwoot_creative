@@ -13,6 +13,12 @@
 # ya tenemos (core ya define unknown_user para esto, lo usa solo en los errores 9010 y 100).
 module Custom::Instagram::MessageText
   def ensure_contact(ig_scope_id)
-    find_or_create_contact(fetch_instagram_user(ig_scope_id).presence || unknown_user(ig_scope_id))
+    profile = fetch_instagram_user(ig_scope_id)
+    return find_or_create_contact(profile) if profile.present?
+
+    # Core devuelve antes de sus propias líneas de log en el 230, así que sin esto el caso
+    # más común quedaría invisible y no habría forma de medir cuántos leads llegan así.
+    Rails.logger.warn("FORK: perfil de IG no disponible para #{ig_scope_id} en inbox #{@inbox.id}; contacto sin nombre")
+    find_or_create_contact(unknown_user(ig_scope_id))
   end
 end

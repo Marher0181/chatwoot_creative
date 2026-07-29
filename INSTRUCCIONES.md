@@ -8,8 +8,14 @@ Corres Chatwoot en Docker y quieres usar tu versión con las personalizaciones d
 - La imagen custom es un **overlay delgado sobre la imagen oficial**: parte de
   `chatwoot/chatwoot:<versión>` y solo le copia `custom/` + `config/application.rb`
   (ver `Dockerfile.custom`). Como tus cambios son **solo Ruby** (policies, finders,
-  listeners, config), **no se recompila nada** → el build tarda segundos y evita el bug
-  de compilación de Chatwoot (bootsnap 1.16 vs Ruby 3.4/prism).
+  listeners, services, builders, config), **no se recompila nada** → el build tarda segundos
+  y evita el bug de compilación de Chatwoot (bootsnap 1.16 vs Ruby 3.4/prism).
+- ⚠️ **Lo único que viaja en la imagen es `custom/` y `config/application.rb`.** Todo el resto
+  (`app/`, `lib/`, `enterprise/`, frontend) lo aporta la imagen oficial intacta. Editar un
+  archivo de `app/` y desplegar **no cambia nada en producción, y no da ningún error** — el
+  build pasa, el deploy pasa, y el comportamiento sigue igual. Cada personalización va como
+  módulo `Custom::` dentro de `custom/app/`, anteponiéndose a la clase de core. Antes de
+  construir, corre el chequeo del paso **A.5.2**.
 - La imagen se publica en **GHCR** (público): `ghcr.io/marher0181/chatwoot-custom`.
 - **Máquina de desarrollo** → git (mergear versiones) + construir overlay + `push`.
 - **Servidor de producción** → cambiar el `image:`, `pull`, migrar.
@@ -21,6 +27,28 @@ Corres Chatwoot en Docker y quieres usar tu versión con las personalizaciones d
 - Imagen: `ghcr.io/marher0181/chatwoot-custom:<versión>` (versión actual: `4.16.2`)
 - Base oficial: `chatwoot/chatwoot:v<versión>`
 - Dockerfile del overlay: `Dockerfile.custom`
+- Rama de producción: `feat/assignee-only-visibility`
+- **Convención de tags:**
+  - Subir de versión de Chatwoot → el tag es la versión: `4.17.0` (ver **A.2**).
+  - Cambio de código propio sin subir de versión → sufijo incremental: `4.16.2-ig-1`,
+    `4.16.2-ig-2`… (ver **A.5**). Nunca reutilices un tag ya publicado: `docker compose pull`
+    puede quedarse con la imagen vieja en caché y creerás que desplegaste algo que no.
+
+## Qué está personalizado (módulos `Custom::`)
+
+Cada uno se antepone a una clase de core. Los que core no expone vía `prepend_mod_with` van
+cableados a mano en `custom/config/initializers/01_prepend_custom_modules.rb`.
+
+| Módulo `Custom::` | Clase de core | Para qué |
+|---|---|---|
+| `ConversationPolicy` | `ConversationPolicy` | visibilidad solo del asignado |
+| `ConversationFinder` | `ConversationFinder` | idem, en los listados |
+| `ActionCableListener` | `ActionCableListener` | no filtrar eventos a agentes ajenos |
+| `NotificationListener` | `NotificationListener` | idem, en notificaciones |
+| `Messages::Facebook::MessageBuilder` | idem | nombre real del contacto vía `/page/conversations` |
+| `Messages::Instagram::BaseMessageBuilder` | idem | guardar el referral del anuncio |
+| `Instagram::MessageText` | idem | no perder el mensaje si falla el perfil |
+| `Instagram::Messenger::MessageText` | idem | idem, canal vía página de Facebook |
 
 ---
 
@@ -124,6 +152,113 @@ Solo puede pasar en 2 sitios, y son raros:
 
 Después: `git commit` y continúa en el paso 5.
 
+## A.5 · Desplegar un cambio de código propio (sin subir de versión de Chatwoot)
+
+Este es el flujo para tus propios arreglos, distinto de A.2 (que es para subir de versión de
+Chatwoot). Los comandos de abajo usan como ejemplo el cambio de Instagram: rama
+`feat/instagram-ads-referral`, versión de Chatwoot `v4.16.2`, tag nuevo `4.16.2-ig-1`.
+Sustituye esos tres valores por los tuyos.
+
+**1. Árbol limpio y rama de producción actualizada:**
+
+```bash
+cd ~/chatwoot_creative                        # tu clon de desarrollo
+git status                                    # debe estar limpio
+git checkout feat/assignee-only-visibility
+git pull origin feat/assignee-only-visibility
+```
+
+**2. Confirma que el cambio vive en `custom/`** — este es el paso que se olvida y hace que el
+deploy no sirva de nada:
+
+```bash
+git diff --name-only HEAD..feat/instagram-ads-referral -- app/ lib/ enterprise/
+```
+
+- **Sin salida** → correcto, todo está en `custom/`. Continúa.
+- **Sale algún archivo** → **PARA.** Eso no entra en la imagen overlay: el build va a pasar, el
+  deploy va a pasar y en producción no va a cambiar nada. Reescríbelo como módulo `Custom::` en
+  `custom/app/` y cabléalo en `custom/config/initializers/01_prepend_custom_modules.rb`.
+
+**3. Mergea tu rama de trabajo:**
+
+```bash
+git merge feat/instagram-ads-referral --no-edit
+```
+
+**4. Elige el tag nuevo.** La versión de Chatwoot no cambia, así que el tag lleva sufijo
+incremental: `4.16.2-ig-1`, `4.16.2-ig-2`… Para ver los ya publicados: GitHub → tu perfil →
+**Packages** → `chatwoot-custom`. **Nunca reutilices un tag publicado.**
+
+**5. Construye el overlay** (`CHATWOOT_VERSION` = la misma versión oficial que ya corre en prod):
+
+```bash
+docker build -f Dockerfile.custom \
+  --build-arg CHATWOOT_VERSION=v4.16.2 \
+  -t ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1 .
+```
+
+Debe tardar segundos. Si se pone a compilar gemas o assets, `CHATWOOT_VERSION` está mal.
+
+**6. Comprueba que los módulos quedaron dentro de la imagen, antes de publicar:**
+
+```bash
+docker run --rm --entrypoint ls \
+  ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1 -R /app/custom/app
+```
+
+Deben aparecer tus archivos nuevos. Si falta alguno, el `COPY` del `Dockerfile.custom` no lo
+recogió (¿está el archivo commiteado?).
+
+**7. Publica en GHCR:**
+
+```bash
+echo <TU_PAT> | docker login ghcr.io -u marher0181 --password-stdin   # si no estás logueado
+docker push ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1
+```
+
+**8. Sube el código a origin:**
+
+```bash
+git push origin feat/assignee-only-visibility
+```
+
+**9. En producción, apunta a la imagen nueva:**
+
+```bash
+ssh <tu-servidor>
+cd ~/chatwoot
+cp docker-compose.yml docker-compose.yml.bak      # para el rollback del paso 12
+# edita el anchor `base` -> image: ghcr.io/marher0181/chatwoot-custom:4.16.2-ig-1
+docker compose pull
+docker compose up -d
+```
+
+**Migraciones:** solo si el cambio toca la BD. Los módulos `Custom::` de Instagram/Facebook no la
+tocan, así que puedes saltarte `db:chatwoot_prepare`. Si dudas, correrlo es idempotente y seguro.
+
+**10. Verifica que el overlay está activo** → ver **B.6**. Si alguna clase sale `FALTA`, el
+prepend no se aplicó y el deploy no sirvió: revisa el paso 2 y el initializer.
+
+**11. Verifica el cambio en la app.** Para el arreglo de Instagram: escribe al negocio desde el
+anuncio con una cuenta que nunca haya escrito antes, y confirma que (a) el mensaje aparece en la
+conversación y (b) puedes responder sin el aviso de la ventana de 24 horas. Y para medir cuántos
+leads llegan sin perfil accesible:
+
+```bash
+docker compose logs --since=24h rails | grep "FORK: perfil de IG"
+```
+
+**12. Si algo salió mal — rollback inmediato:**
+
+```bash
+cd ~/chatwoot
+cp docker-compose.yml.bak docker-compose.yml     # vuelve al tag anterior
+docker compose up -d
+```
+
+No hace falta tocar la BD si no corriste migraciones.
+
 ---
 
 # B · Servidor de producción
@@ -174,13 +309,13 @@ docker compose restart rails sidekiq
 
 ```bash
 docker compose exec rails cat config/version.rb
-docker compose exec rails bundle exec rails runner \
-  'puts [ConversationPolicy, ConversationFinder, ActionCableListener, NotificationListener].map { |k| k.ancestors.any? { |a| a.name.to_s.start_with?("Custom::") } }.inspect'
 ```
 
-Esperado: la versión correcta y `[true, true, true, true]`.
+y comprueba el overlay con **B.6**.
 
 ## B.3 · Actualizar a una versión ya publicada
+
+Para un cambio de código propio, el flujo completo (dev + prod) está en **A.5**.
 
 Después de completar la parte A (build + push de la versión nueva):
 
@@ -220,3 +355,31 @@ docker system prune -af      # borra imágenes sin usar, contenedores parados y 
 
 `prune -af` no toca las imágenes de contenedores en ejecución. Si aun así falta espacio,
 hay que ampliar el volumen EBS desde AWS (EC2 → Volumes → Modify) + `sudo growpart` + `sudo resize2fs`.
+
+## B.6 · Verificar que el overlay está activo
+
+Comprueba que cada clase de core tiene su módulo `Custom::` antepuesto. Es la única forma de
+saber que el deploy realmente aplicó tus cambios: si el overlay no cargó, la app arranca igual
+y se comporta como la oficial, sin ningún error visible.
+
+```bash
+cd ~/chatwoot
+docker compose exec rails bundle exec rails runner '
+[ConversationPolicy, ConversationFinder, ActionCableListener, NotificationListener,
+ Messages::Facebook::MessageBuilder, Messages::Instagram::BaseMessageBuilder,
+ Instagram::MessageText, Instagram::Messenger::MessageText].each do |klass|
+  ok = klass.ancestors.any? { |mod| mod.name.to_s.start_with?("Custom::") }
+  puts format("%-6s %s", ok ? "OK" : "FALTA", klass)
+end'
+```
+
+Esperado: `OK` en las ocho. Si sale algún `FALTA`:
+
+1. ¿El módulo está en `custom/app/` y commiteado? (paso **A.5.2**)
+2. ¿Está cableado en `custom/config/initializers/01_prepend_custom_modules.rb`? Solo se
+   auto-antepone lo que core expone vía `prepend_mod_with`; el resto va a mano.
+3. ¿La imagen que corre es el tag nuevo? `docker compose config | grep image:`
+4. ¿El archivo llegó a la imagen? `docker compose exec rails ls -R /app/custom/app`
+
+Cuando agregues un módulo `Custom::` nuevo, añade su clase a la lista de arriba y a la tabla de
+**Qué está personalizado**.

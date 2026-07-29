@@ -5,7 +5,11 @@ module Custom::Instagram::Messenger::MessageText
   private
 
   def ensure_contact(ig_scope_id)
-    find_or_create_contact(fetch_instagram_user(ig_scope_id).presence || unknown_user(ig_scope_id))
+    profile = fetch_instagram_user(ig_scope_id)
+    return find_or_create_contact(profile) if profile.present?
+
+    Rails.logger.warn("FORK: perfil de IG no disponible para #{ig_scope_id} en inbox #{@inbox.id}; contacto sin nombre")
+    find_or_create_contact(unknown_user(ig_scope_id))
   end
 
   # Core solo define unknown_user en el canal de login directo de Instagram.
