@@ -7,6 +7,6 @@ module Custom::Messages::Instagram::BaseMessageBuilder
 
   def build_message
     super
-    save_ad_referral(@messaging[:referral] || @messaging.dig(:postback, :referral))
+    save_ad_referral(@messaging[:referral] || @messaging.dig(:postback, :referral), 'instagram')
   end
 end

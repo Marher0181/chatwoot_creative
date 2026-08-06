@@ -9,7 +9,7 @@ module Custom::Messages::Facebook::MessageBuilder
   # FORK: atribución de anuncios de Facebook Ads.
   def build_message
     super
-    save_ad_referral(response.referral)
+    save_ad_referral(response.referral, 'facebook')
   end
 
   def process_contact_params_result(result)
