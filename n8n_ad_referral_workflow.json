@@ -1,0 +1,220 @@
+{
+  "name": "Evolution - Atribucion de anuncios Meta a Chatwoot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "evolution-ad-referral",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Webhook Evolution",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "evolution-ad-referral-hook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nada configurable aqui: instance/apikey/server_url vienen en el payload y la\n// URL + accountId de Chatwoot los da Evolution en el nodo siguiente.\n\n// externalAdReply cuelga de imageMessage / audioMessage / stickerMessage /\n// extendedTextMessage segun el tipo, asi que se busca recursivamente.\nconst find = (obj, key) => {\n  if (!obj || typeof obj !== 'object') return null;\n  if (obj[key] !== undefined && obj[key] !== null) return obj[key];\n  for (const v of Object.values(obj)) {\n    const hit = find(v, key);\n    if (hit !== null && hit !== undefined) return hit;\n  }\n  return null;\n};\n\nconst out = [];\n\nfor (const item of $input.all()) {\n  const body = item.json.body ?? item.json;\n  const data = body.data ?? body;\n  // Se busca en todo `data`, no solo en `data.message`: Evolution sube el\n  // contextInfo a `data.contextInfo` (hermano de message) segun el tipo.\n  const ad = find(data, 'externalAdReply');\n\n  // Sin referral no hay nada que atribuir: el 99.9% de los mensajes cae aqui.\n  if (!ad) continue;\n\n  const convId = data.chatwootConversationId;\n  if (!convId) {\n    // ponytail: si esta rama se llena, Evolution aun no habia creado la\n    // conversacion al emitir el webhook -> resolver el id buscando por\n    // telefono (GET /contacts/search?q=<numero>) antes del POST.\n    out.push({ json: { skip: true, jid: data.key?.remoteJid, ad_id: ad.sourceId } });\n    continue;\n  }\n\n  // sourceApp dice DONDE corrio el anuncio (whatsapp = Estados, facebook,\n  // instagram); entryPointConversionSource solo viene en algunos payloads.\n  const src = find(data, 'entryPointConversionSource') || ad.sourceApp || 'ad';\n  const adId = ad.sourceId || '';\n\n  out.push({\n    json: {\n      skip: false,\n      // El propio payload trae con que preguntarle a Evolution por su account\n      // de Chatwoot, asi que no hay mapa inbox->account que mantener.\n      instance: body.instance ?? data.instance,\n      apikey: body.apikey,\n      server_url: body.server_url,\n      conv_id: convId,\n      inbox_id: data.chatwootInboxId,\n      jid: data.key?.remoteJid,\n      // ponytail: URL firmada del CDN de Meta, expira en horas. Sirve para trafico\n      // en vivo. Si un backfill viejo falla al descargarla, usar thumb_b64.\n      image_url: ad.originalImageUrl || ad.thumbnailUrl || '',\n      thumb_b64: ad.thumbnail || '',\n      custom_attributes: {\n        ad_source: src,\n        ad_id: adId,\n        ad_title: ad.title || '',\n        ad_copy: (ad.body || '').trim().slice(0, 200),\n        ad_url: ad.sourceUrl || ''\n      },\n      note: [\n        '**Lead desde anuncio de Meta**',\n        '',\n        '- Fuente: ' + src + ' (' + (ad.sourceType || 's/d') + ')',\n        '- Anuncio: ' + (ad.title || 's/d'),\n        '- Anuncio (id): ' + (adId || 's/d'),\n        '- Ads Manager: https://adsmanager.facebook.com/adsmanager/manage/ads?selected_ad_ids=' + adId,\n        '- Preview WhatsApp: ' + (ad.sourceUrl || 's/d'),\n        '',\n        (ad.body || '').trim().slice(0, 300)\n      ].join('\\n')\n    }\n  });\n}\n\nreturn out;"
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Extraer referral",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-has-conv",
+              "leftValue": "={{ !$json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Tiene conversacion?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.server_url }}/chatwoot/find/{{ $json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.apikey }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Resolver account de la instancia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, -100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}/api/v1/accounts/{{ $json.accountId }}/conversations/{{ $('Extraer referral').item.json.conv_id }}/custom_attributes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ custom_attributes: $('Extraer referral').item.json.custom_attributes }) }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Guardar atributos en Chatwoot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, -100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "RputXBdJL8MrCOJ0",
+          "name": "Access Chatwoot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Extraer referral').item.json.image_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000009",
+      "name": "Descargar creativo del anuncio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, -100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Resolver account de la instancia').item.json.url }}/api/v1/accounts/{{ $('Resolver account de la instancia').item.json.accountId }}/conversations/{{ $('Extraer referral').item.json.conv_id }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $('Extraer referral').item.json.note }}"
+            },
+            {
+              "name": "message_type",
+              "value": "outgoing"
+            },
+            {
+              "name": "private",
+              "value": "true"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "attachments[]",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Nota privada con el anuncio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, -100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "RputXBdJL8MrCOJ0",
+          "name": "Access Chatwoot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "revisar",
+              "value": "={{ 'referral sin conversacion en Chatwoot: ' + $json.jid + ' / anuncio ' + $json.ad_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Sin conversacion (revisar)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [720, 120]
+    },
+    {
+      "parameters": {
+        "content": "## Multi-cuenta, sin mapas\n\nCada instancia de Evolution vive en un account distinto de Chatwoot\n(ABITOPA→2, PLUSGT→3, Banyo Trading→5). En vez de hardcodear eso, el nodo\n**Resolver account de la instancia** le pregunta a Evolution por su propia\nconfig (`GET /chatwoot/find/{instance}`) y saca el `accountId`.\n\nEl `instance`, `apikey` y `server_url` vienen en el payload del webhook, así\nque una instancia nueva funciona sin tocar nada.\n\n## Setup\n\n1. En **cada** account de Chatwoot (2, 3, 5, …) → Settings → Custom Attributes,\n   crea con scope **Conversation** y tipo Text:\n   `ad_source`, `ad_id`, `ad_title`, `ad_copy`, `ad_url`.\n   Los custom attributes son por account, no globales.\n2. En Evolution, apunta el webhook `messages.upsert` de cada instancia a la URL\n   de producción de este workflow.\n\nUsa la credencial **Access Chatwoot** que ya tenías — debe ser de un usuario\ncon acceso a todos los accounts.",
+        "height": 460,
+        "width": 460
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Instrucciones",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 240]
+    }
+  ],
+  "connections": {
+    "Webhook Evolution": {
+      "main": [[{ "node": "Extraer referral", "type": "main", "index": 0 }]]
+    },
+    "Extraer referral": {
+      "main": [[{ "node": "Tiene conversacion?", "type": "main", "index": 0 }]]
+    },
+    "Tiene conversacion?": {
+      "main": [
+        [{ "node": "Resolver account de la instancia", "type": "main", "index": 0 }],
+        [{ "node": "Sin conversacion (revisar)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Resolver account de la instancia": {
+      "main": [[{ "node": "Guardar atributos en Chatwoot", "type": "main", "index": 0 }]]
+    },
+    "Guardar atributos en Chatwoot": {
+      "main": [[{ "node": "Descargar creativo del anuncio", "type": "main", "index": 0 }]]
+    },
+    "Descargar creativo del anuncio": {
+      "main": [[{ "node": "Nota privada con el anuncio", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

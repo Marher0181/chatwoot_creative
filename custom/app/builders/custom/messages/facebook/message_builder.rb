@@ -2,7 +2,15 @@
 # nuevos de Facebook se creaban como "John Doe". El endpoint /{page_id}/conversations
 # sí trae los nombres de los participantes, lo usamos como fallback.
 module Custom::Messages::Facebook::MessageBuilder
+  include Custom::AdReferral
+
   private
+
+  # FORK: atribución de anuncios de Facebook Ads.
+  def build_message
+    super
+    save_ad_referral(response.referral)
+  end
 
   def process_contact_params_result(result)
     params = super
