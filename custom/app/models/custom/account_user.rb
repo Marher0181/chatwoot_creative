@@ -6,4 +6,11 @@ module Custom::AccountUser
   def self.prepended(base)
     base.before_create { self.auto_offline = false }
   end
+
+  # FORK: core solo activa push_conversation_assignment, con lo que al agente le suena el movil
+  # al asignarsele la conversacion pero no con los mensajes siguientes. Sumamos ese flag.
+  def create_notification_setting
+    super
+    user.notification_settings.find_by!(account_id: account.id).update!(push_assigned_conversation_new_message: true)
+  end
 end
