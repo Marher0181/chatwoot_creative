@@ -1,4 +1,19 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Chatwoot Development Guidelines
+
+## Architecture (big picture)
+
+Chatwoot is a Rails 7 monolith with a Vue 3 SPA frontend, plus an Enterprise overlay.
+
+- **Backend (`app/`)**: Rails app. API controllers under `app/controllers/api/v1/accounts/` (account-scoped) and `api/v1/` (global) back the SPA. Business logic lives in `app/services/` (e.g. channel/message send flows) and `app/builders/` (object construction). Async work runs through `app/jobs/` (Sidekiq); `app/listeners/` + `app/dispatchers/` implement an internal pub/sub event bus (`Rails.configuration.dispatcher`). Authorization is in `app/policies/` (Pundit). `app/models/` holds ActiveRecord with STI for channels (`Channel::*`) and inbox abstraction.
+- **Frontend (`app/javascript/`)**: Vite-built. `dashboard/` = agent SPA (Vuex store in `dashboard/store/`, feature modules under `dashboard/routes/`), `widget/` = the embeddable live-chat widget, `sdk/` = JS SDK, `portal/` = help-center, `v3/` + `design-system/` = newer component work. Message bubbles: use `components-next/` (rest is deprecated).
+- **Channels & inboxes**: A conversation belongs to an inbox, which wraps a channel (WebWidget, Email, WhatsApp, Facebook, etc.). Inbound messages flow through channel-specific `app/mailboxes/` or webhook controllers → builders → conversation/message models → dispatcher events → jobs (notifications, integrations, automations).
+- **Enterprise (`enterprise/`)**: Overlays OSS via `prepend_mod_with`/`include_mod_with`. Mirrors the `app/` layout. Core changes must stay compatible — see the Enterprise Edition Notes below.
+- **Fork customizations (`custom/`)**: This repo's own overlay, third tree alongside `app/` and `enterprise/` — see Fork Overlay below.
+- **Multi-tenancy**: Everything is scoped to an `Account`. Most controllers inherit account scoping; `current_account`/`Current` carry request context.
 
 ## Build / Test / Lint
 
@@ -112,6 +127,19 @@ Practical checklist for any change impacting core logic or public APIs
 - When renaming/moving shared code, mirror the change in `enterprise/` to prevent drift.
 - Tests: Add Enterprise-specific specs under `spec/enterprise`, mirroring OSS spec layout where applicable.
 - When modifying existing OSS features for Enterprise-only behavior, add an Enterprise module (via `prepend_mod_with`/`include_mod_with`) instead of editing OSS files directly—especially for policies, controllers, and services. For Enterprise-exclusive features, place code directly under `enterprise/`.
+
+## Fork Overlay (`custom/`)
+
+This repo is a fork of upstream Chatwoot. Fork-only Ruby changes live in `custom/`, mirroring the `app/` layout (`custom/app/policies/custom/...`) under a `Custom::` namespace.
+
+- Loading: `config/application.rb` adds `custom/app/**` to autoload/eager-load paths and requires `custom/config/initializers/**` when `custom/` exists on disk.
+- Wiring: files whose core counterpart already calls `prepend_mod_with` are picked up automatically. Everything else is prepended explicitly in `custom/config/initializers/01_prepend_custom_modules.rb` inside a `to_prepare` block.
+- Rule: put fork behavior in `custom/` as a prepended module; edit `app/`, `enterprise/`, or `config/application.rb` only when there is no other hook. Every fork change in a core file must be tagged with a `FORK:` comment so it survives upstream merges.
+- Current customizations: assignee-only conversation visibility (`conversation_policy.rb`, `conversation_finder.rb`, `action_cable_listener.rb`), admin-only notifications (`notification_builder.rb`) and Facebook contact-name resolution (`messages/facebook/message_builder.rb`).
+
+## Deployment (fork images)
+
+Production runs the official Chatwoot image plus the `custom/` overlay — no gem or asset rebuild. `Dockerfile.custom` starts `FROM chatwoot/chatwoot:${CHATWOOT_VERSION}` and copies `custom/` + `config/application.rb` into it, publishing to `ghcr.io/marher0181/chatwoot-custom:<version>`. Full merge/build/deploy/rollback runbook: `INSTRUCCIONES.md` (Spanish).
 
 ## Branding / White-labeling note
 
