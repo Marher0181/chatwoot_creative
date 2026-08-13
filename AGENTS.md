@@ -135,7 +135,8 @@ This repo is a fork of upstream Chatwoot. Fork-only Ruby changes live in `custom
 - Loading: `config/application.rb` adds `custom/app/**` to autoload/eager-load paths and requires `custom/config/initializers/**` when `custom/` exists on disk.
 - Wiring: files whose core counterpart already calls `prepend_mod_with` are picked up automatically. Everything else is prepended explicitly in `custom/config/initializers/01_prepend_custom_modules.rb` inside a `to_prepare` block.
 - Rule: put fork behavior in `custom/` as a prepended module; edit `app/`, `enterprise/`, or `config/application.rb` only when there is no other hook. Every fork change in a core file must be tagged with a `FORK:` comment so it survives upstream merges.
-- Current customizations: assignee-only conversation visibility (`conversation_policy.rb`, `conversation_finder.rb`, `action_cable_listener.rb`), admin-only notifications (`notification_builder.rb`) and Facebook contact-name resolution (`messages/facebook/message_builder.rb`).
+- Current customizations: assignee-only conversation visibility (`conversation_policy.rb`, `conversation_finder.rb`, `action_cable_listener.rb`), sticky availability status for new agents (`account_user.rb`) and Facebook contact-name resolution (`messages/facebook/message_builder.rb`).
+- Notifications need no overlay: core `NotificationBuilder` already gates every notification through `ConversationPolicy#show?`, so the assignee-only policy above makes notifications reach admins and the conversation assignee only.
 
 ## Deployment (fork images)
 
