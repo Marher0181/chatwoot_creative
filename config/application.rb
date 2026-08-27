@@ -60,6 +60,8 @@ module Chatwoot
       # rubocop:enable Rails/FilePath
       custom_initializers = Rails.root.join('custom/config/initializers')
       Dir[custom_initializers.join('**/*.rb')].each { |f| require f } if custom_initializers.exist?
+      # FORK: migraciones del overlay (canned responses por usuario)
+      config.paths['db/migrate'] << 'custom/db/migrate'
     end
 
     # Settings in config/environments/* take precedence over those specified here.

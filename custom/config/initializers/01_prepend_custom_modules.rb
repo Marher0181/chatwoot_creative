@@ -6,4 +6,6 @@ Rails.application.config.to_prepare do
   Messages::Facebook::MessageBuilder.prepend(Custom::Messages::Facebook::MessageBuilder)
   Messages::Instagram::BaseMessageBuilder.prepend(Custom::Messages::Instagram::BaseMessageBuilder)
   Integrations::Facebook::MessageParser.prepend(Custom::Integrations::Facebook::MessageParser)
+  CannedResponse.include(Custom::CannedResponse)
+  Api::V1::Accounts::CannedResponsesController.prepend(Custom::Api::V1::Accounts::CannedResponsesController)
 end
